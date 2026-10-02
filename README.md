@@ -67,23 +67,33 @@ supported alternative.**
 
 ## Setup
 
-### Go
+### Before you clone
 
-monoxide is implemented in Go. Head to [Go website](https://golang.org) for
-setup information.
+* **Go 1.23 minimum, 1.24 recommended.** `go.mod` pins `go 1.23.0` with
+  `toolchain go1.24.2`.
+* **GitHub Actions is not enabled on this repository**, so there are no CI
+  artifacts. Build from source.
+* The binary is named **`monoxide`**, matching the module and the
+  `~/.config/monoxide` configuration directory.
 
 ### Installing
 
 ```shell
 git clone https://github.com/Tahlasandale/monoxide.git
 cd monoxide
-go build ./cmd/ferroxide
+go build ./cmd/monoxide
+```
+
+Optionally put it on your `PATH`:
+
+```shell
+go build -o ~/.local/bin/monoxide ./cmd/monoxide
 ```
 
 Then login to ProtonMail so that monoxide can retrieve e-mails:
 
 ```shell
-./ferroxide auth <username>
+./monoxide auth <username>
 ```
 
 Once logged in, a "bridge password" will be printed. **Save it somewhere safe** —
@@ -122,13 +132,13 @@ If the response offers no captcha method, `auth` points you at
 ## Usage
 
 > Don't start monoxide multiple times, instead you can use
-> `ferroxide serve`. This requires ports 1025 (smtp), 1143 (imap), 8080
+> `monoxide serve`. This requires ports 1025 (smtp), 1143 (imap), 8080
 > (carddav) and 8081 (caldav).
 
 ### SMTP
 
 ```shell
-ferroxide smtp
+monoxide smtp
 ```
 
 Configure your e-mail client with:
@@ -146,19 +156,25 @@ Configure your e-mail client with:
 Only unencrypted local connections are supported.
 
 ```shell
-ferroxide imap
+monoxide imap
 ```
 
 ### CardDAV / CalDAV
 
-You must set up an HTTPS reverse proxy to forward requests to `ferroxide`.
+You must set up an HTTPS reverse proxy to forward requests to `monoxide`.
 
 ```shell
-ferroxide carddav
-ferroxide caldav
+monoxide carddav
+monoxide caldav
 ```
 
 ### Reading mail from a terminal
+
+`mailread` is a separate binary, build it first:
+
+```shell
+go build ./cmd/mailread
+```
 
 ```shell
 # list unread messages
