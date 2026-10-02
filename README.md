@@ -187,6 +187,18 @@ HYDROXIDE_BRIDGE_PASS=... ./mailread -user <username> -all
 HYDROXIDE_BRIDGE_PASS=... ./mailread -user <username> -read -mark-read
 ```
 
+## Using with a mail client
+
+`monoxide` is a headless bridge, so you need a client to read mail in. The
+bridge password you get from `auth` is what the client authenticates with, not
+your ProtonMail password.
+
+The upstream README documents plain IMAP/SMTP settings, which is enough for most
+clients. For [Himalaya](https://github.com/pimalaya/himalaya) in particular —
+where the IMAP and SMTP servers each need a *different* SASL mechanism, or
+authentication fails on both — see **[docs/himalaya.md](docs/himalaya.md)**. It
+also covers running the bridge under systemd so it survives a reboot.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Original work © 2017 emersion.
