@@ -2,8 +2,8 @@ image: archlinux
 packages:
   - go
 sources:
-  - https://github.com/acheong08/ferroxide.git
+  - https://github.com/Tahlasandale/monoxide.git
 tasks:
   - build: |
-      cd ferroxide
+      cd monoxide
       go build -v ./...

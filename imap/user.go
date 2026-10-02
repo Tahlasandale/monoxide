@@ -6,11 +6,11 @@ import (
 	"sync"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/Tahlasandale/monoxide/events"
+	"github.com/Tahlasandale/monoxide/imap/database"
+	"github.com/Tahlasandale/monoxide/protonmail"
 	"github.com/emersion/go-imap"
 	imapbackend "github.com/emersion/go-imap/backend"
-	"github.com/acheong08/ferroxide/events"
-	"github.com/acheong08/ferroxide/imap/database"
-	"github.com/acheong08/ferroxide/protonmail"
 )
 
 var systemMailboxes = []struct {

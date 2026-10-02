@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
-	"github.com/acheong08/ferroxide/protonmail"
-	"github.com/acheong08/ferroxide/utils"
+	"github.com/Tahlasandale/monoxide/protonmail"
+	"github.com/Tahlasandale/monoxide/utils"
 	"github.com/emersion/go-ical"
 	"github.com/emersion/go-webdav/caldav"
 )
@@ -439,7 +439,7 @@ func (b *backend) CurrentUserPrincipal(ctx context.Context) (string, error) {
 
 func NewHandler(c *protonmail.Client, privateKeys openpgp.EntityList, username string, events <-chan *protonmail.Event) http.Handler {
 	if len(privateKeys) == 0 {
-		panic("ferroxide/caldav: no private key available")
+		panic("monoxide/caldav: no private key available")
 	}
 
 	keyCache := map[string]openpgp.EntityList{username: privateKeys}

@@ -7,8 +7,8 @@ import (
 	"github.com/emersion/go-imap"
 	imapbackend "github.com/emersion/go-imap/backend"
 
-	"github.com/acheong08/ferroxide/auth"
-	"github.com/acheong08/ferroxide/events"
+	"github.com/Tahlasandale/monoxide/auth"
+	"github.com/Tahlasandale/monoxide/events"
 )
 
 var errNotYetImplemented = errors.New("not yet implemented")
