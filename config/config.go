@@ -27,7 +27,7 @@ func Path(filename string) (string, error) {
 		return "", err
 	}
 
-	p := filepath.Join(configHome, "ferroxide", filename)
+	p := filepath.Join(configHome, "monoxide", filename)
 
 	dirname, _ := filepath.Split(p)
 	if err := os.MkdirAll(dirname, 0700); err != nil {

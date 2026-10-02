@@ -1,4 +1,4 @@
-module github.com/acheong08/ferroxide
+module github.com/Tahlasandale/monoxide
 
 go 1.23.0
 

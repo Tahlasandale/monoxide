@@ -14,3 +14,7 @@
 .glide/
 
 auth.json
+
+# Built binaries
+/ferroxide
+/mailread
