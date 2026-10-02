@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -20,16 +21,16 @@ import (
 	"github.com/emersion/go-smtp"
 	"golang.org/x/term"
 
-	"github.com/acheong08/ferroxide/auth"
-	"github.com/acheong08/ferroxide/caldav"
-	"github.com/acheong08/ferroxide/carddav"
-	"github.com/acheong08/ferroxide/config"
-	"github.com/acheong08/ferroxide/events"
-	"github.com/acheong08/ferroxide/exports"
-	imapbackend "github.com/acheong08/ferroxide/imap"
-	"github.com/acheong08/ferroxide/imports"
-	"github.com/acheong08/ferroxide/protonmail"
-	smtpbackend "github.com/acheong08/ferroxide/smtp"
+	"github.com/Tahlasandale/monoxide/auth"
+	"github.com/Tahlasandale/monoxide/caldav"
+	"github.com/Tahlasandale/monoxide/carddav"
+	"github.com/Tahlasandale/monoxide/config"
+	"github.com/Tahlasandale/monoxide/events"
+	"github.com/Tahlasandale/monoxide/exports"
+	imapbackend "github.com/Tahlasandale/monoxide/imap"
+	"github.com/Tahlasandale/monoxide/imports"
+	"github.com/Tahlasandale/monoxide/protonmail"
+	smtpbackend "github.com/Tahlasandale/monoxide/smtp"
 	"github.com/google/uuid"
 )
 
@@ -61,7 +62,7 @@ func makeHTTPClientFromProxy(proxyArg string) (*http.Client, error) {
 		if strings.HasPrefix(proxyArg, "socks5://") {
 			proxyArg = strings.Replace(proxyArg, "socks5://", "", 1)
 		}
-		fmtProxy = fmt.Sprintf("socks5://ferroxide_%s::@%s", un, proxyArg)
+		fmtProxy = fmt.Sprintf("socks5://monoxide_%s::@%s", un, proxyArg)
 
 	} else {
 		if !strings.Contains(proxyArg, "://") {
@@ -99,6 +100,123 @@ func newClient() *protonmail.Client {
 		Debug:      debug,
 		HTTPClient: httpClient,
 	}
+}
+
+// maxHVAttempts bounds how many captcha rounds we let the user retry, so a
+// rejected token cannot loop forever.
+const maxHVAttempts = 5
+
+// handleHumanVerification retries authentication after the user has solved a
+// Proton human-verification challenge.
+//
+// Proton's API answers unknown clients with Code 9001 plus an opaque token,
+// and expects the client to replay /auth carrying the x-pm-human-verification
+// headers. The challenge itself can only be solved in a browser, so we print
+// the URL and ask the user to paste the token back.
+func handleHumanVerification(c *protonmail.Client, username, password string, authInfo *protonmail.AuthInfo, authErr error) (*protonmail.Auth, error) {
+	apiErr, ok := authErr.(*protonmail.APIError)
+	if !ok || !apiErr.NeedsHumanVerification() {
+		return nil, authErr
+	}
+
+	if apiErr.Code == protonmail.CodeStaleCaptcha {
+		log.Println("Previous verification token was rejected, requesting a new captcha.")
+		c.SetHumanVerificationToken("", "")
+	}
+
+	for attempt := 0; attempt < maxHVAttempts; attempt++ {
+		if attempt > 0 {
+			fmt.Println()
+			log.Println("Token rejected, you can solve another captcha.")
+		}
+
+		token, tokenType, err := promptHumanVerification(apiErr)
+		if err != nil {
+			return nil, err
+		}
+		c.SetHumanVerificationToken(token, tokenType)
+
+		a, err := c.Auth(username, password, authInfo)
+		if err == nil {
+			return a, nil
+		}
+
+		// Refresh the challenge details from the new error so the next
+		// round shows a valid URL.
+		apiErr, ok = err.(*protonmail.APIError)
+		if !ok || !apiErr.NeedsHumanVerification() {
+			return nil, err
+		}
+		log.Printf("request failed: %v", err)
+	}
+
+	return nil, fmt.Errorf("human verification failed after %v attempts", maxHVAttempts)
+}
+
+// promptHumanVerification walks the user through solving a captcha and
+// returns the resulting token and its type.
+func promptHumanVerification(apiErr *protonmail.APIError) (string, string, error) {
+	if verificationURL, ok := apiErr.VerificationURL(); ok {
+		fmt.Println()
+		fmt.Println("Proton requires human verification for this login.")
+		fmt.Println("Open this URL in your browser and solve the captcha:")
+		fmt.Println()
+		fmt.Println("    " + verificationURL)
+		fmt.Println()
+		fmt.Println("Then copy the token it gives you and paste it below.")
+		fmt.Println("(If the page opens without asking for a captcha, that is fine,")
+		fmt.Println(" take the token from the success page.)")
+	} else {
+		// Fail-closed: no captcha URL means we cannot help automate this.
+		// Point at the web client instead of guessing.
+		fmt.Println()
+		fmt.Println("Proton requires human verification for this login.")
+		fmt.Println("Sign in to https://mail.proton.me in your browser and complete")
+		fmt.Println("the verification there, then run this command again.")
+		return "", "", fmt.Errorf("no captcha challenge available for this response")
+	}
+
+	fmt.Print("Verification token: ")
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return "", "", fmt.Errorf("could not read verification token")
+	}
+	token := strings.TrimSpace(scanner.Text())
+	if token == "" {
+		return "", "", fmt.Errorf("empty verification token")
+	}
+
+	// The page may hand back a JSON envelope instead of a bare token.
+	token, tokenType := parseVerificationToken(token)
+	return token, tokenType, nil
+}
+
+// parseVerificationToken accepts either a bare token or the JSON envelope the
+// verification page reports, and returns the token with its type.
+func parseVerificationToken(s string) (string, string) {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "{") {
+		return s, "captcha"
+	}
+
+	var envelope struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Token string `json:"token"`
+			Type  string `json:"type"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(s), &envelope); err != nil {
+		return s, "captcha"
+	}
+	if envelope.Payload.Token == "" {
+		return s, "captcha"
+	}
+	tokenType := envelope.Payload.Type
+	if tokenType == "" {
+		tokenType = "captcha"
+	}
+	return envelope.Payload.Token, tokenType
 }
 
 func askPass(prompt string) ([]byte, error) {
@@ -269,19 +387,19 @@ func isMbox(br *bufio.Reader) (bool, error) {
 	return bytes.Equal(b, prefix), nil
 }
 
-const usage = `usage: ferroxide [options...] <command>
+const usage = `usage: monoxide [options...] <command>
 Commands:
-	auth <username>		Login to ProtonMail via ferroxide
-	carddav			Run ferroxide as a CardDAV server
-	caldav			Run ferroxide as a CalDAV server
+	auth <username>		Login to ProtonMail via monoxide
+	carddav			Run monoxide as a CardDAV server
+	caldav			Run monoxide as a CalDAV server
 	export-secret-keys <username> Export secret keys
-	imap			Run ferroxide as an IMAP server
+	imap			Run monoxide as an IMAP server
 	import-messages <username> [file]	Import messages
 	export-messages [options...] <username>	Export messages
 	sendmail <username> -- <args...>	sendmail(1) interface
 	serve			Run all servers
-	smtp			Run ferroxide as an SMTP server
-	status			View ferroxide status
+	smtp			Run monoxide as an SMTP server
+	status			View monoxide status
 
 Environment variables:
 	HYDROXIDE_BRIDGE_PASS	Don't prompt for the bridge password, use this variable instead
@@ -293,27 +411,27 @@ func main() {
 	flag.StringVar(&apiEndpoint, "api-endpoint", defaultAPIEndpoint, "ProtonMail API endpoint")
 	flag.StringVar(&appVersion, "app-version", defaultAppVersion, "ProtonMail app version")
 
-	smtpHost := flag.String("smtp-host", "127.0.0.1", "Allowed SMTP email hostname on which ferroxide listens, defaults to 127.0.0.1")
-	smtpPort := flag.String("smtp-port", "1025", "SMTP port on which ferroxide listens, defaults to 1025")
-	disableSMTP := flag.Bool("disable-smtp", false, "Disable SMTP for ferroxide serve")
+	smtpHost := flag.String("smtp-host", "127.0.0.1", "Allowed SMTP email hostname on which monoxide listens, defaults to 127.0.0.1")
+	smtpPort := flag.String("smtp-port", "1025", "SMTP port on which monoxide listens, defaults to 1025")
+	disableSMTP := flag.Bool("disable-smtp", false, "Disable SMTP for monoxide serve")
 
-	imapHost := flag.String("imap-host", "127.0.0.1", "Allowed IMAP email hostname on which ferroxide listens, defaults to 127.0.0.1")
-	imapPort := flag.String("imap-port", "1143", "IMAP port on which ferroxide listens, defaults to 1143")
-	disableIMAP := flag.Bool("disable-imap", false, "Disable IMAP for ferroxide serve")
+	imapHost := flag.String("imap-host", "127.0.0.1", "Allowed IMAP email hostname on which monoxide listens, defaults to 127.0.0.1")
+	imapPort := flag.String("imap-port", "1143", "IMAP port on which monoxide listens, defaults to 1143")
+	disableIMAP := flag.Bool("disable-imap", false, "Disable IMAP for monoxide serve")
 
-	carddavHost := flag.String("carddav-host", "127.0.0.1", "Allowed CardDAV email hostname on which ferroxide listens, defaults to 127.0.0.1")
-	carddavPort := flag.String("carddav-port", "8080", "CardDAV port on which ferroxide listens, defaults to 8080")
-	disableCardDAV := flag.Bool("disable-carddav", false, "Disable CardDAV for ferroxide serve")
+	carddavHost := flag.String("carddav-host", "127.0.0.1", "Allowed CardDAV email hostname on which monoxide listens, defaults to 127.0.0.1")
+	carddavPort := flag.String("carddav-port", "8080", "CardDAV port on which monoxide listens, defaults to 8080")
+	disableCardDAV := flag.Bool("disable-carddav", false, "Disable CardDAV for monoxide serve")
 
-	caldavHost := flag.String("caldav-host", "127.0.0.1", "Allowed CalDAV email hostname on which ferroxide listens, defaults to 127.0.0.1")
-	caldavPort := flag.String("caldav-port", "8081", "CalDAV port on which ferroxide listens, defaults to 8081")
-	disableCalDAV := flag.Bool("disable-caldav", false, "Disable CalDAV for ferroxide serve")
+	caldavHost := flag.String("caldav-host", "127.0.0.1", "Allowed CalDAV email hostname on which monoxide listens, defaults to 127.0.0.1")
+	caldavPort := flag.String("caldav-port", "8081", "CalDAV port on which monoxide listens, defaults to 8081")
+	disableCalDAV := flag.Bool("disable-caldav", false, "Disable CalDAV for monoxide serve")
 
 	tlsCert := flag.String("tls-cert", "", "Path to the certificate to use for incoming connections")
 	tlsCertKey := flag.String("tls-key", "", "Path to the certificate key to use for incoming connections")
 	tlsClientCA := flag.String("tls-client-ca", "", "If set, clients must provide a certificate signed by the given CA")
 
-	configHome := flag.String("config-home", "", "Path to the directory where ferroxide stores its configuration")
+	configHome := flag.String("config-home", "", "Path to the directory where monoxide stores its configuration")
 	flag.StringVar(&proxyURL, "proxy-url", "", "HTTP proxy URL (e.g. socks5://127.0.0.1:1080)")
 	flag.BoolVar(&tor, "tor", false, "If set, connect to ProtonMail over Tor")
 
@@ -355,7 +473,7 @@ func main() {
 		authCmd.Parse(flag.Args()[1:])
 		username := authCmd.Arg(0)
 		if username == "" {
-			log.Fatal("usage: ferroxide auth <username>")
+			log.Fatal("usage: monoxide auth <username>")
 		}
 
 		c := newClient()
@@ -385,7 +503,10 @@ func main() {
 
 			a, err = c.Auth(username, loginPassword, authInfo)
 			if err != nil {
-				log.Fatal(err)
+				a, err = handleHumanVerification(c, username, loginPassword, authInfo, err)
+				if err != nil {
+					log.Fatal(err)
+				}
 			}
 
 			if a.TwoFactor.Enabled != 0 {
@@ -466,7 +587,7 @@ func main() {
 		exportSecretKeysCmd.Parse(flag.Args()[1:])
 		username := exportSecretKeysCmd.Arg(0)
 		if username == "" {
-			log.Fatal("usage: ferroxide export-secret-keys <username>")
+			log.Fatal("usage: monoxide export-secret-keys <username>")
 		}
 
 		bridgePassword, err := askBridgePass()
@@ -498,7 +619,7 @@ func main() {
 		username := importMessagesCmd.Arg(0)
 		archivePath := importMessagesCmd.Arg(1)
 		if username == "" {
-			log.Fatal("usage: ferroxide import-messages <username> [file]")
+			log.Fatal("usage: monoxide import-messages <username> [file]")
 		}
 
 		f := os.Stdin
@@ -549,7 +670,7 @@ func main() {
 		exportMessagesCmd.Parse(flag.Args()[1:])
 		username := exportMessagesCmd.Arg(0)
 		if (convID == "" && msgID == "") || username == "" {
-			log.Fatal("usage: ferroxide export-messages [-conversation-id <id>] [-message-id <id>] <username>")
+			log.Fatal("usage: monoxide export-messages [-conversation-id <id>] [-message-id <id>] <username>")
 		}
 
 		bridgePassword, err := askBridgePass()
@@ -631,7 +752,7 @@ func main() {
 	case "sendmail":
 		username := flag.Arg(1)
 		if username == "" || flag.Arg(2) != "--" {
-			log.Fatal("usage: ferroxide sendmail <username> -- <args...>")
+			log.Fatal("usage: monoxide sendmail <username> -- <args...>")
 		}
 
 		// TODO: other sendmail flags
