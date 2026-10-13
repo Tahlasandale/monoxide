@@ -154,7 +154,9 @@ func handleHumanVerification(c *protonmail.Client, username, password string, au
 }
 
 // promptHumanVerification walks the user through solving a captcha and
-// returns the resulting token and its type.
+// returns the HumanVerificationToken from the challenge URL along with its
+// type. Proton returns the same token in the 9001 Details, and replaying
+// /auth with it is accepted once the challenge has been solved in a browser.
 func promptHumanVerification(apiErr *protonmail.APIError) (string, string, error) {
 	if verificationURL, ok := apiErr.VerificationURL(); ok {
 		fmt.Println()
@@ -163,9 +165,9 @@ func promptHumanVerification(apiErr *protonmail.APIError) (string, string, error
 		fmt.Println()
 		fmt.Println("    " + verificationURL)
 		fmt.Println()
-		fmt.Println("Then copy the token it gives you and paste it below.")
-		fmt.Println("(If the page opens without asking for a captcha, that is fine,")
-		fmt.Println(" take the token from the success page.)")
+		fmt.Println("Solve the captcha there, then paste the token from the URL above")
+		fmt.Println("back here. That is the HumanVerificationToken, not a solved")
+		fmt.Println("proof -- the verification page never displays one.")
 	} else {
 		// Fail-closed: no captcha URL means we cannot help automate this.
 		// Point at the web client instead of guessing.

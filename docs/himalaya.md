@@ -101,7 +101,50 @@ you are on the wrong SASL mechanism; go back to the table above.
 
 Because the account is marked `default = true`, `-a proton` is optional.
 
-## 4. Sending
+## 4. Regenerating the bridge password
+
+Three things bite here, and all three produce the same unhelpful
+`invalid username or password` / `Invalid access token`.
+
+**The bridge password is not your Proton password.** It is a random 32-byte
+value that `monoxide auth` prints once. It encrypts your stored credentials on
+disk, and it is what every client authenticates with.
+
+**Running `auth` again invalidates the previous bridge password.** Every
+`monoxide auth <username>` generates a new one and prints it, whatever was
+stored before. Update all three places afterwards or nothing will authenticate:
+
+```shell
+# 1. the systemd env file
+$EDITOR ~/.config/systemd/user/monoxide.env
+
+# 2. both passwords in the Himalaya config
+$EDITOR ~/.config/himalaya/config.toml
+```
+
+Then reload and restart:
+
+```shell
+systemctl --user daemon-reload
+systemctl --user restart monoxide.service
+```
+
+**Stop the service before running `auth`.** A running `serve` holds the
+session key in memory and rewrites `auth.json` behind your back, which leaves
+the file undecryptable by the next login:
+
+```shell
+systemctl --user stop monoxide
+monoxide auth <username>      # note the new bridge password
+systemctl --user start monoxide
+```
+
+If `monoxide status` lists the account but every connection is refused, the
+stored credentials no longer match the password you have — redo the auth. If
+`status` works but `himalaya` reports `Invalid access token`, the stored
+Proton refresh token expired; a plain `systemctl --user restart` renews it.
+
+## 5. Sending
 
 Himalaya v2 builds the message itself: recipients come from the `To:` header,
 not from a `-t` flag. Write an RFC 5322 file and pass it after `--`:
@@ -122,23 +165,36 @@ A successful send prints `Message successfully sent`. Copies land in the
 mailbox named by `message.send.save-copy`.
 
 The `From:` address must match one of your ProtonMail addresses exactly —
-`monoxide` rejects anything else with `unknown sender address`.
+`monoxide` rejects anything else with `unknown sender address`. A single
+account often has both `@proton.me` and `@protonmail.com`; either works as a
+recipient, but the one you put in `From:` has to be the one you actually use
+for sending.
+
+To list what your account really has:
+
+```shell
+hydroxide list-addresses <username>   # or any client, once the bridge runs
+```
 
 ## Running as a service
 
 A bridge started by hand dies with your terminal. To keep it running across
 reboots, use a systemd user unit.
 
-Create `~/.config/systemd/user/monoxide.env` holding the password, mode `600`,
-and keep it out of the unit file itself:
+Create `~/.config/systemd/user/monoxide.env` holding the password, and keep it
+out of the unit file itself:
 
 ```shell
-cat > ~/.config/systemd/user/monoxide.env <<'EOF'
-HYDROXIDE_BRIDGE_PASS=your bridge password
-EOF
-
-chmod 600 ~/.config/systemd/user/monoxide.env
+printf 'HYDROXIDE_BRIDGE_PASS=your bridge password\n' \
+  > ~/.config/systemd/user/monoxide.env
+chmod 640 ~/.config/systemd/user/monoxide.env
 ```
+
+Two details that matter here. `printf` rather than a heredoc: a file with no
+trailing newline leaves systemd unable to parse the variable. And `640`, not
+`600`: systemd runs the unit in its own context and cannot read a file only
+your user can. With `600` the password is silently ignored and every
+connection is refused with `invalid username or password`.
 
 Then `~/.config/systemd/user/monoxide.service`:
 
@@ -174,6 +230,12 @@ a reboot until you log in again. Turn on lingering once:
 
 ```shell
 sudo loginctl enable-linger "$USER"
+```
+
+Confirm it took:
+
+```shell
+loginctl show-user "$USER" -p Linger    # Linger=yes
 ```
 
 After that the unit starts at boot with no login session required. Check with
