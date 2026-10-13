@@ -1,7 +1,6 @@
 package imap
 
 import (
-	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -436,20 +435,43 @@ func (mbox *mailbox) SearchMessages(isUID bool, c *imap.SearchCriteria) ([]uint3
 }
 
 func (mbox *mailbox) CreateMessage(flags []string, date time.Time, body imap.Literal) error {
-	if mbox.label != protonmail.LabelDraft {
-		return errors.New("cannot create messages outside the Drafts mailbox")
-	}
-
 	if err := mbox.init(); err != nil {
 		return err
 	}
 
-	_, err := createMessage(mbox.u.c, mbox.u.u, mbox.u.privateKeys, mbox.u.addrs, body)
+	// createMessage can only create a draft, whatever mailbox APPEND targets.
+	msg, err := createMessage(mbox.u.c, mbox.u.u, mbox.u.privateKeys, mbox.u.addrs, body)
 	if err != nil {
 		return err
 	}
 
+	// APPEND into another mailbox, Sent being what mail clients use to keep a
+	// copy of what they just sent. Move the draft over, the same way
+	// MoveMessages does.
+	if moveTarget := appendTarget(mbox.label); moveTarget != "" {
+		ids := []string{msg.ID}
+		if err := mbox.u.c.LabelMessages(moveTarget, ids); err != nil {
+			return err
+		}
+		if err := mbox.u.c.UnlabelMessages(protonmail.LabelDraft, ids); err != nil {
+			return err
+		}
+	}
+
 	return mbox.Poll()
+}
+
+// appendTarget returns the label a freshly created draft must be moved to after
+// an APPEND, or "" when the draft is already where it belongs.
+//
+// createMessage can only create drafts, so an APPEND targeting any other mailbox
+// has to relabel afterwards. Returning "" for Drafts is what keeps a real draft
+// a draft.
+func appendTarget(label string) string {
+	if label == protonmail.LabelDraft {
+		return ""
+	}
+	return label
 }
 
 func (mbox *mailbox) fromSeqSet(isUID bool, seqSet *imap.SeqSet) ([]string, error) {
