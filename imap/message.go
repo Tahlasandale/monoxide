@@ -424,6 +424,7 @@ func createMessage(c *protonmail.Client, u *protonmail.User, privateKeys openpgp
 	}
 
 	msg := &protonmail.Message{
+		Sender:    protonmailAddressList(fromList)[0],
 		ToList:    protonmailAddressList(toList),
 		CCList:    protonmailAddressList(ccList),
 		BCCList:   protonmailAddressList(bccList),
